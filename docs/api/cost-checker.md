@@ -17,7 +17,9 @@ The SDK has no separate `CostPreCheckerOptions` type: the constructor takes `Cos
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `interceptor` | `Pick<PreFlightInterceptor, "check">` | required | Its `check()` supplies both the verdict and the price, from one enforced simulation. ⚠️ If that interceptor has `cache` enabled, the price can come from a cached verdict (up to one ledger / 5 s old). |
-| `maxFeeStroops` | `bigint` | none — no ceiling; the price is reported, never objected to | Ceiling on the estimated **total** fee (resource + inclusion). Must be a non-negative `bigint`, otherwise `InvalidFeeCeilingError` at construction. `0n` is a real ceiling (every quote is then `over_budget`). ⚠️ Omitting it disables the fee check entirely. |
+| `maxFeeStroops` | `bigint \| string` | none — no ceiling; the price is reported, never objected to | Ceiling on the estimated **total** fee (resource + inclusion). Accepts a non-negative `bigint` or base-10 integer string from `0` through the Stellar u64 fee limit. Malformed strings and out-of-range values throw `InvalidInputError` at construction. `0n` / `"0"` is a real ceiling. ⚠️ Omitting it disables the fee check entirely. |
+| `networkPassphrase` | `string` | none | Required by `checkTransaction()` to reject a transaction built for a different network. |
+| `server` | `rpc.Server` | none | Required by `checkTransaction()` only when no simulation response is supplied. |
 | `policySource` | `string \| PolicyConfig \| null` | none — `policyContext` is `null` | Contract address or policy enabling the additive `policyContext`. Informational only: it never changes the cost decision. |
 | `policy` | `string \| PolicyConfig \| null` | none | Alias for `policySource`. Per-call values win over constructor values; `policySource` wins over `policy` at each level. |
 | `logger` | `GuardLoggerInput` | none — silent | Log sink for the priced verdict and ceiling breaches. Never changes the decision. |
@@ -30,16 +32,16 @@ The SDK has no separate `CostPreCheckerOptions` type: the constructor takes `Cos
 | --- | --- | --- | --- |
 | `policySource` | `string \| PolicyConfig \| null` | the constructor's `policySource` / `policy` | Per-call policy source for `policyContext`. |
 | `policy` | `string \| PolicyConfig \| null` | as above | Alias for `policySource`. |
-| `maxFeeStroops` | `bigint` | the constructor's `maxFeeStroops` | Per-call ceiling, validated before the interceptor runs (`InvalidFeeCeilingError`). `0n` is kept, not treated as omission. |
+| `maxFeeStroops` | `bigint \| string` | the constructor's `maxFeeStroops` | Per-call ceiling, validated before simulation. `0n` / `"0"` is kept, not treated as omission. |
 | `windowSnapshot` | `WindowSpendSnapshot \| null` | the constructor's `windowSnapshot` | Per-call snapshot; an explicit `null` clears the configured one for this check. |
 | `signal` | `AbortSignal` | none | ⚠️ Forwarded to the interceptor: a fired signal yields an `undetermined` verdict and therefore an `undetermined` cost decision carrying `RpcTimeoutError`. |
 | `timeoutMs` | `number` | `DEFAULT_RPC_TIMEOUT_MS` (30 000 ms) per RPC call | ⚠️ A fired timeout is reported exactly like an abort, never as `within_budget`. `0` disables it. |
 
-Malformed ceilings are rejected before the interceptor runs, so a bad budget policy cannot spend an RPC call or be hidden behind a guard verdict. `InvalidFeeCeilingError` extends `InvalidInputError` (itself a `TypeError`) and exposes `field`, `rule: "non_negative_bigint"` and the rejected `value`.
+Malformed ceilings are rejected before the interceptor runs, so a bad budget policy cannot spend an RPC call or be hidden behind a guard verdict. `InvalidFeeCeilingError` remains the error for legacy wrong-type and negative-bigint inputs. Malformed strings and values above u64 throw `InvalidInputError`; both expose the offending field and an actionable validation detail.
 
 ## Methods
 
-### `check(call: ContractCall, options?: { policySource?: string | PolicyConfig | null; maxFeeStroops?: bigint; windowSnapshot?: WindowSpendSnapshot | null }): Promise<CostPreCheckResult>`
+### `check(call: ContractCall, options?: { policySource?: string | PolicyConfig | null; maxFeeStroops?: bigint | string; windowSnapshot?: WindowSpendSnapshot | null }): Promise<CostPreCheckResult>`
 
 Returns `CostPreCheckResult` (`CostDecision`), a discriminated union:
 - `{ kind: "within_budget", allowed: true, totalFeeStroops, resourceFeeStroops, inclusionFeeStroops, footprintKeys, feeCeilingStroops, policyContext, provenance }`
@@ -47,15 +49,42 @@ Returns `CostPreCheckResult` (`CostDecision`), a discriminated union:
 - `{ kind: "blocked", allowed: false, reason, explanation, detail, totalFeeStroops: 0n, resourceFeeStroops: 0n, inclusionFeeStroops: 0n, policyContext, provenance: null }`
 - `{ kind: "undetermined", allowed: false, detail, totalFeeStroops: 0n, resourceFeeStroops: 0n, inclusionFeeStroops: 0n, policyContext, provenance: null }`
 
-### Ledger Provenance (`provenance`)
+### `checkTransaction(transaction, options?): Promise<CostDecision>`
 
-Priced decisions carry the ledger marker of the simulation that produced the quote:
+Prices an already-built Stellar SDK `Transaction` without rebuilding or
+modifying its envelope. Set `networkPassphrase` in `CostPreCheckConfig`; a
+mismatch is rejected with `InvalidInputError` before simulation. Pass
+`options.simulation` when the exact transaction has already been simulated;
+otherwise configure `server` and the checker simulates that envelope directly.
+An unsuccessful or unpriceable simulation returns a fail-closed
+`undetermined` decision. The total is the envelope's actual fee, with the
+simulated resource fee separated from the remainder as inclusion fee.
+Transaction quotes carry
+`provenance: { ledger: number | null, source: "transaction" }` (the ledger is
+null if the RPC response did not establish a usable sequence). Ordinary
+`check()` quotes retain the interceptor's call path and mark known-ledger
+provenance with `source: "call"`.
 
 ```ts
-provenance: { ledger: number } | null
+const decision = await checker.checkTransaction(transaction, {
+  simulation: alreadySimulatedResponse,
+  maxFeeStroops: "50000",
+});
 ```
 
-- `ledger` is `latestLedger` read from the **same** enforced simulation, not from a second `getLatestLedger()` call that could race ahead of the state actually priced.
+### Ledger Provenance (`provenance`)
+
+Priced decisions carry the ledger marker and input path of the simulation that
+produced the quote:
+
+```ts
+provenance:
+  | { ledger: number; source?: "call" | "transaction" }
+  | { ledger: null; source: "transaction" }
+  | null
+```
+
+- `ledger` is `latestLedger` read from the **same** simulation, not from a second `getLatestLedger()` call that could race ahead of the state actually priced.
 - `null` means the simulation did not establish a usable ledger (absent, non-numeric, fractional, negative or unsafe integer). The SDK never fabricates a ledger number.
 - This is **informational only**: it identifies the snapshot a quote describes. It is not a promise that a transaction will land in that ledger, and a quote may be stale by submission time.
 - `blocked` and `undetermined` decisions are not simulation-priced, so their `provenance` is always `null`.
