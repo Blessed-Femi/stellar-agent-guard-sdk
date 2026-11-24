@@ -15,6 +15,8 @@ as the change — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ### Added
 
+- `CostPreChecker.checkTransaction()` to price an already-built Stellar transaction against its exact envelope, with optional supplied simulation, network-passphrase validation, and transaction-path provenance. Fee ceilings and fee-bump `initialInclusionFee` now accept validated base-10 strings as well as `bigint` values (#448, #449, #450).
+- Seeded property coverage for fee arithmetic and formatting, plus stable golden outputs for every `describeCostDecision()` kind (#451).
 - `onMappingError` on every framework adapter: a mapper that throws or returns a malformed call now fires this integration-bug hook once, with `{ adapter, tool, errorClass, error }` and no raw tool arguments unless `includeMappingErrorRequest` opts in, before the fail-closed halt. `onBlocked` keeps firing for compatibility, so a broken mapper is no longer indistinguishable from a guard refusal in operator alerts (#453).
 - `DEFAULT_ADAPTER_TIMEOUT_MS`: the adapter-level default per-RPC bound, aliasing the pre-flight `DEFAULT_RPC_TIMEOUT_MS` (30 000 ms) and resolved by all four adapters. `timeoutMs: 0` remains an explicit opt-out that relies on `signal` (#455).
 - A worked fee breakdown in `docs/api/cost-checker.md` using the committed Phase 2 testnet simulation: raw resource values, the exact stroop formula, the decision objects under a tight and a loose ceiling, and refundability per fee component (#452).
