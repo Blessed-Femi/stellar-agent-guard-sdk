@@ -448,7 +448,8 @@ describe("describeCostDecision", () => {
         footprintKeys: 3,
         feeCeilingStroops: null,
         policyContext: context,
-        expected: "within budget: 2100 stroops (2000 resource + 100 inclusion), no ceiling",
+        expected:
+          "within budget: 2100 stroops (2000 resource + 100 inclusion), no ceiling, surplus unknown",
       },
       {
         kind: "over_budget" as const,
@@ -459,7 +460,7 @@ describe("describeCostDecision", () => {
         footprintKeys: 3,
         feeCeilingStroops: 2_000n,
         policyContext: undefined,
-        expected: "over budget: 2100 stroops exceeds ceiling 2000",
+        expected: "over budget: 2100 stroops exceeds ceiling 2000, surplus unknown",
       },
       {
         kind: "blocked" as const,
@@ -1493,6 +1494,7 @@ describe("feeSource: rpc inclusion-fee quotes (issue #445)", () => {
       feeSource: "rpc",
       percentile: "p90",
       feeStatsLedger: 777,
+      source: "call",
     });
   });
 
@@ -1538,6 +1540,7 @@ describe("feeSource: rpc inclusion-fee quotes (issue #445)", () => {
       feeSource: "rpc",
       percentile: "p50",
       feeStatsLedger: 777,
+      source: "call",
     });
   });
 
@@ -1553,7 +1556,7 @@ describe("feeSource: rpc inclusion-fee quotes (issue #445)", () => {
     const decision = await checker.check(CALL);
     assert.equal(calls, 0);
     assert.equal(decision.inclusionFeeStroops, inclusion);
-    assert.deepEqual(decision.provenance, { ledger: 512_345 });
+    assert.deepEqual(decision.provenance, { ledger: 512_345, source: "call" });
   });
 
   it("does not price a refusal with a fee-stats RPC", async () => {
